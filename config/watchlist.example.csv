@@ -1,0 +1,17 @@
+symbol,name,market,groups,source_code,enabled,note
+AAPL,苹果,US,示例,AAPL.US,1,
+MSFT,微软,US,示例,MSFT.US,1,
+NVDA,英伟达,US,示例,NVDA.US,1,
+SPY,标普500 ETF,US,示例,SPY.US,1,
+QQQ,纳指100 ETF,US,示例,QQQ.US,1,
+^GSPC,标普 500 指数,US,指数,.SPX.US,1,指数，仅作参考
+0700.HK,腾讯控股,HK,示例,700.HK,1,
+9988.HK,阿里巴巴-W,HK,示例,9988.HK,1,
+2800.HK,盈富基金,HK,示例,2800.HK,1,
+^HSI,恒生指数,HK,指数,HSI.HK,1,指数，仅作参考
+600519.SS,贵州茅台,CN,示例,600519.SH,1,
+300750.SZ,宁德时代,CN,示例,300750.SZ,1,
+005930.KS,三星电子,KR,示例,005930.KS,1,
+000660.KS,SK海力士,KR,示例,000660.KS,1,
+7203.T,丰田汽车,JP,示例,7203.JP,1,
+AAPL270115C300000,AAPL Call,,,AAPL270115C300000.US,0,期权合约，不扫描（示例：导入时自动禁用）

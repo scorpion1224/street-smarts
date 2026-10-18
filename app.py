@@ -49,7 +49,8 @@ def watch_names() -> dict:
     """自选股清单里的中文名：Yahoo 代码 → 名称。"""
     try:
         from ss_scanner.watchlist import read_csv
-        df = read_csv("config/watchlist.csv")
+        f = "config/watchlist.csv" if Path("config/watchlist.csv").exists() else "config/watchlist.example.csv"
+        df = read_csv(f)
         return {normalize_symbol(r["symbol"]).candidates[0]: r["name"] for _, r in df.iterrows() if r["symbol"]}
     except Exception:
         return {}
@@ -175,7 +176,8 @@ with tab_watch:
     SESS = {"us_eu": "美欧收盘（美股/英股/德股）", "asia": "亚洲收盘（A股/港股/韩股/日股）", "all": "全部市场"}
     avail = [k for k in SESS if (LATEST / f"{k}_summary.json").exists()]
     if not avail:
-        st.info("还没有每日扫描结果。GitHub Actions 每个交易日收盘后会自动运行并把结果写入 latest/ 目录。")
+        st.info("为保护隐私，自选股扫描结果不会上传到仓库或公开网页，只通过微信 / 邮件推送。"
+                "在本地运行 `python -m ss_scanner daily` 后，这里会显示 latest/ 目录中的结果。")
     else:
         sess = st.radio("时段", avail, format_func=lambda k: SESS[k], horizontal=True)
         summ = json.loads((LATEST / f"{sess}_summary.json").read_text(encoding="utf-8"))

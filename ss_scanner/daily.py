@@ -51,7 +51,11 @@ DEFAULT_CFG = {
 }
 
 
+EXAMPLE_WATCHLIST = "config/watchlist.example.csv"
+
+
 def load_cfg(path: str | None) -> dict:
+    """读取 alerts.yaml；环境变量优先：SS_WEB_URL（网页地址）、SS_WATCHLIST（自选股 CSV 路径）。"""
     cfg = json.loads(json.dumps(DEFAULT_CFG))
     if path and Path(path).exists():
         user = yaml.safe_load(open(path, encoding="utf-8")) or {}
@@ -60,6 +64,16 @@ def load_cfg(path: str | None) -> dict:
                 cfg[k].update(v)
             else:
                 cfg[k] = v
+    if os.environ.get("SS_WEB_URL"):
+        cfg["web_url"] = os.environ["SS_WEB_URL"].strip()
+    if os.environ.get("SS_WATCHLIST"):
+        cfg["watchlist"] = os.environ["SS_WATCHLIST"].strip()
+    cfg["web_url"] = (cfg.get("web_url") or "").strip()
+    if cfg["web_url"] and not cfg["web_url"].endswith("/"):
+        cfg["web_url"] += "/"
+    if not Path(cfg["watchlist"]).exists() and Path(EXAMPLE_WATCHLIST).exists():
+        print(f"[提示] 未找到 {cfg['watchlist']}（真实自选股不入库），改用示例 {EXAMPLE_WATCHLIST}")
+        cfg["watchlist"] = EXAMPLE_WATCHLIST
     return cfg
 
 

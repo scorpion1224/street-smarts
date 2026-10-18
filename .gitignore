@@ -1,4 +1,34 @@
+# Python / 工具
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+.DS_Store
+
+# 行情缓存与报告
 .cache/
 reports/
-__pycache__/
-*.pyc
+
+# 私有数据：真实自选股、扫描结果（只在本地或加密产物中保存）
+config/watchlist.csv
+config/*.local.*
+config/alerts.local.yaml
+*.xlsx
+*.xls
+latest/
+history/
+out/
+*_email.html
+*.wechat.md
+mail_preview*.html
+
+# 密钥 / 环境变量
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+*.pem
+*.key

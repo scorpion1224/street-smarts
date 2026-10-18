@@ -1,5 +1,11 @@
 name: Daily watchlist scan
 
+# 隐私说明：
+# - 真实自选股不入库，运行时从 Secret WATCHLIST_CSV_GZ（gzip + base64）还原；未设置则扫描示例清单
+# - 扫描结果不再提交到仓库，只通过微信/邮件发送，并作为 Actions 产物保存 14 天：
+#   私有仓库 → 直接上传；公开仓库 → 仅在设置了 Secret ARTIFACT_PASSWORD 时加密上传（公开仓库的产物任何登录用户都能下载）
+# - 日志只打印数量统计，不打印具体代码
+
 on:
   schedule:
     # GitHub cron 使用 UTC，且可能延迟 5–30 分钟
@@ -22,7 +28,7 @@ on:
         default: false
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: daily-scan
@@ -43,6 +49,17 @@ jobs:
 
       - run: pip install -r requirements-bot.txt
 
+      - name: Restore private watchlist
+        env:
+          WATCHLIST_CSV_GZ: ${{ secrets.WATCHLIST_CSV_GZ }}
+        run: |
+          if [ -n "$WATCHLIST_CSV_GZ" ]; then
+            printf '%s' "$WATCHLIST_CSV_GZ" | base64 -d | gunzip > config/watchlist.csv
+            echo "已还原私有自选股：$(($(wc -l < config/watchlist.csv) - 1)) 行"
+          else
+            echo "::warning::未设置 Secret WATCHLIST_CSV_GZ，将扫描示例清单 config/watchlist.example.csv"
+          fi
+
       - name: Pick session
         id: s
         run: |
@@ -54,37 +71,52 @@ jobs:
             echo "session=us_eu" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Scan & email
+      - name: Scan & notify
         env:
+          SS_WEB_URL: ${{ secrets.SS_WEB_URL }}
+          SERVERCHAN_KEY: ${{ secrets.SERVERCHAN_KEY }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           MAIL_TO: ${{ secrets.MAIL_TO }}
           MAIL_FROM: ${{ secrets.MAIL_FROM }}
-          SERVERCHAN_KEY: ${{ secrets.SERVERCHAN_KEY }}
         run: |
           ARGS="--session ${{ steps.s.outputs.session }} --preview latest/${{ steps.s.outputs.session }}_email.html"
           [ "${{ inputs.always_send }}" = "true" ] && ARGS="$ARGS --always"
           [ "${{ inputs.any_date }}" = "true" ] && ARGS="$ARGS --any-date"
           if [ -n "$SERVERCHAN_KEY" ]; then ARGS="$ARGS --wechat"; fi
           if [ -n "$SMTP_USER" ] && [ -n "$SMTP_PASS" ]; then ARGS="$ARGS --email"; fi
-          if [ -z "$SERVERCHAN_KEY" ] && [ -z "$SMTP_PASS" ]; then echo "::warning::未配置 SERVERCHAN_KEY 或 SMTP_*，只保存结果不发通知"; fi
+          if [ -z "$SERVERCHAN_KEY" ] && [ -z "$SMTP_PASS" ]; then echo "::warning::未配置 SERVERCHAN_KEY 或 SMTP_*，不会发送通知"; fi
+          mkdir -p latest
           python -m ss_scanner daily $ARGS
 
-      - name: Commit results
+      - name: Package results (private)
+        id: pkg
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_PASSWORD: ${{ secrets.ARTIFACT_PASSWORD }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add latest
-          if [ -d history ]; then git add history; fi
-          if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-          git commit -m "scan: ${{ steps.s.outputs.session }} $(date -u +%F)"
-          git pull --rebase --autostash && git push
+          mkdir -p out
+          [ -d latest ] || { echo "upload=false" >> "$GITHUB_OUTPUT"; exit 0; }
+          tar czf out/results.tgz latest $( [ -d history ] && echo history )
+          PRIVATE=$(gh api "repos/${{ github.repository }}" -q .private 2>/dev/null || echo unknown)
+          if [ -n "$ARTIFACT_PASSWORD" ]; then
+            openssl enc -aes-256-cbc -pbkdf2 -salt -in out/results.tgz -out out/results.tgz.enc -pass env:ARTIFACT_PASSWORD
+            rm out/results.tgz
+            echo "已加密结果（解密：openssl enc -d -aes-256-cbc -pbkdf2 -in results.tgz.enc -out results.tgz）"
+            echo "upload=true" >> "$GITHUB_OUTPUT"
+          elif [ "$PRIVATE" = "true" ]; then
+            echo "upload=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::仓库非私有且未设置 ARTIFACT_PASSWORD，不上传扫描结果（结果已通过微信/邮件发送）"
+            echo "upload=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && steps.pkg.outputs.upload == 'true'
         with:
           name: scan-${{ steps.s.outputs.session }}-${{ github.run_id }}
-          path: latest/
+          path: out/
           retention-days: 14

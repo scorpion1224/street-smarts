@@ -21,17 +21,19 @@ INDEX_MAP = {".SPX": "^GSPC", ".NDX": "^NDX", ".IXIC": "^IXIC", ".DJI": "^DJI", 
              ".HXC": "^HXC", "HSI": "^HSI", "HSTECH": "HSTECH.HK", "HSCEI": "^HSCE"}
 SFX_MAP = {"SH": "SS", "SZ": "SZ", "HK": "HK", "JP": "T", "UK": "L", "DE": "DE", "AU": "AX", "SG": "SI"}
 _OPTION = re.compile(r"^[A-Z]+\d{6}[CP]\d+$")
-# Yahoo 上无可用日线的标的（2026 实测）：code -> 原因
-NO_DATA = {
-           "^HXC": "指数；Yahoo 历史日线不足，无法计算",
+# 指数：Yahoo 历史日线不足，无法计算
+NO_DATA = {"^HXC": "指数；Yahoo 历史日线不足，无法计算",
            "HSTECH.HK": "指数；Yahoo 历史日线不足，可用恒生科技 ETF 3033.HK 代替"}
-# 额外加入韩股原股（示例）
-EXTRA = [
-    dict(symbol="005930.KS", name="三星电子", market="KR", groups="示例", source_code="(自动添加)",
-         enabled=1, note="韩股原股（示例）"),
-    dict(symbol="000660.KS", name="SK海力士", market="KR", groups="示例", source_code="(自动添加)",
-         enabled=1, note="韩股原股（示例）"),
-]
+# 韩国公司的美股 ADR / 场外代码 → 韩国交易所原股（清单中出现时自动补充原股，便于按韩股规则扫描）
+KR_ORIGINALS = {
+    "SSNGY": ("005930.KS", "三星电子"), "SSNLF": ("005930.KS", "三星电子"), "SKHY": ("000660.KS", "SK海力士"),
+    "KB": ("105560.KS", "KB金融"), "SHG": ("055550.KS", "新韩金融"), "WF": ("316140.KS", "友利金融"),
+    "PKX": ("005490.KS", "POSCO控股"), "KEP": ("015760.KS", "韩国电力"), "SKM": ("017670.KS", "SK电讯"),
+    "KT": ("030200.KS", "KT"), "LPL": ("034220.KS", "LG显示"), "HYMTF": ("005380.KS", "现代汽车"),
+}
+# 已知在 Yahoo 无日线的韩国 ADR：导入时禁用（由原股替代）
+KR_NO_DATA = {"SSNGY", "SSNLF", "HYMTF"}
+LOCAL_DISABLED_NOTE = "（本地手动禁用，重新导入时保留）"
 
 
 def convert_code(code: str) -> tuple[str | None, str]:
@@ -59,6 +61,8 @@ def convert_code(code: str) -> tuple[str | None, str]:
         sym = c
     if sym in NO_DATA or body in NO_DATA:
         return None, NO_DATA.get(sym) or NO_DATA[body]
+    if sym in KR_NO_DATA:
+        return None, f"Yahoo 无该 ADR 日线；已改用韩股原股 {KR_ORIGINALS[sym][0]}"
     return sym, ""
 
 
@@ -75,7 +79,8 @@ def _read_sheet(df: pd.DataFrame) -> pd.DataFrame | None:
     return None
 
 
-def import_longbridge(xlsx: str | Path, add_extra: bool = True) -> pd.DataFrame:
+def import_longbridge(xlsx: str | Path, add_extra: bool = True, keep_from: str | Path | None = None) -> pd.DataFrame:
+    """keep_from：已有的 watchlist.csv；其中 enabled=0 的行（如 Yahoo 无数据而手动禁用）在重新导入后继续禁用。"""
     sheets = pd.read_excel(xlsx, sheet_name=None, dtype=str)
     rows, seen = [], set()
     for name, raw in sheets.items():
@@ -104,10 +109,22 @@ def import_longbridge(xlsx: str | Path, add_extra: bool = True) -> pd.DataFrame:
                              groups="" if groups.lower() == "nan" else groups.replace("、", ";"),
                              source_code=code, enabled=int(bool(sym)), note=note))
     if add_extra:
-        for e in EXTRA:
-            if e["symbol"] not in seen:
-                rows.append(dict(e))
-    return pd.DataFrame(rows, columns=COLUMNS)
+        for r in list(rows):
+            body = r["source_code"].upper().rsplit(".", 1)[0]
+            if body in KR_ORIGINALS and KR_ORIGINALS[body][0] not in seen:
+                sym, name = KR_ORIGINALS[body]
+                seen.add(sym)
+                rows.append(dict(symbol=sym, name=name, market="KR", groups=r["groups"], source_code="(自动添加)",
+                                 enabled=1, note=f"韩股原股，对应 {r['source_code']}"))
+    df = pd.DataFrame(rows, columns=COLUMNS)
+    if keep_from and Path(keep_from).exists():
+        old = read_csv(keep_from)
+        off = old[old["enabled"].astype(str) == "0"]
+        off_codes = dict(zip(off["source_code"], off["note"]))
+        m = df["source_code"].isin(off_codes) & (df["enabled"].astype(int) == 1)
+        df.loc[m, "enabled"] = 0
+        df.loc[m, "note"] = df.loc[m, "source_code"].map(lambda c: (off_codes[c] or "") + LOCAL_DISABLED_NOTE)
+    return df
 
 
 def save_csv(df: pd.DataFrame, path: str | Path = DEFAULT_CSV) -> Path:

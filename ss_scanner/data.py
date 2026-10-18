@@ -117,6 +117,8 @@ def load_many(insts: list[Instrument], period: str = "2y", batch: int = 80, retr
 
     import yfinance as yf
 
+    # 不在（可能公开的）CI 日志里打印具体代码
+    logging.getLogger("yfinance").setLevel(logging.CRITICAL)
     out: dict[int, pd.DataFrame] = {}
     errs: dict[int, str] = {}
     todo = list(range(len(insts)))
@@ -129,7 +131,7 @@ def load_many(insts: list[Instrument], period: str = "2y", batch: int = 80, retr
                 raw = yf.download(syms, period=period, auto_adjust=True, group_by="ticker", threads=True,
                                   progress=False, timeout=30)
             except Exception as e:  # 整批失败
-                log.warning("批量下载失败(%s)：%s", e, syms[:3])
+                log.warning("批量下载失败（%d 只）：%s", len(syms), type(e).__name__)
                 missing += chunk
                 continue
             for j, sym in zip(chunk, syms):

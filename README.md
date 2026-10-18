@@ -61,9 +61,10 @@ streamlit run app.py          # 浏览器打开 http://localhost:8501 ；同一 
 > 也可部署到 Hugging Face Spaces（选 Streamlit SDK）或自己的云服务器（`streamlit run app.py --server.port 80`）。
 > 海外服务器上 AkShare（东方财富接口）可能不通，会自动回退 Yahoo。
 
-## 1.6 每日自动扫描自选股 + 邮件提醒（GitHub Actions，免费）
+## 1.6 每日自动扫描自选股 + 微信/邮件提醒（GitHub Actions，免费）
 
-自选股清单在 `config/watchlist.csv`（由 Longbridge 导出的 Excel 生成，可直接手工增删行、把 `enabled` 改成 0 暂停某只）：
+真实自选股放在本地 `config/watchlist.csv`（已在 `.gitignore`，**不会提交**）；仓库里只有示例 `config/watchlist.example.csv`，
+格式相同（symbol, name, market, groups, source_code, enabled, note），可手工增删行、把 `enabled` 改成 0 暂停某只。
 
 ```bash
 python -m ss_scanner import "自选股清单 · 按市场分类.xlsx"   # 重新导入（会覆盖 watchlist.csv）
@@ -81,8 +82,20 @@ python -m ss_scanner daily --session asia --email               # 发送邮件�
 | `asia` | 17:00 | A股、港股、韩股、日股、澳股 |
 | `us_eu` | 次日 05:30 | 美股、英股、德股 |
 
-每次运行：批量下载行情 → 只扫描「最后一根K线是当地今天」的标的（休市/假日自动跳过）→ 结果写入 `latest/`、`history/` 并自动提交到仓库
-（Streamlit 网页「自选股每日扫描」页随之更新）→ 有「挂单 / 收盘入场」信号时发邮件（正文按策略分组，每个策略显示距入场价最近的若干条，完整列表在附件 CSV）。
+每次运行：从 Secret 还原私有自选股 → 批量下载行情 → 只扫描「最后一根K线是当地今天」的标的（休市/假日自动跳过）
+→ 有「挂单 / 收盘入场」信号时推送微信/邮件（按策略分组，每个策略显示距入场价最近的若干条，邮件附完整 CSV）。
+
+**隐私设计**
+
+- 真实自选股：本地 `config/watchlist.csv` → 存为仓库 Secret `WATCHLIST_CSV_GZ`（未设置时扫描示例清单）：
+  ```bash
+  gzip -c config/watchlist.csv | base64 -w0 | gh secret set WATCHLIST_CSV_GZ   # 改了清单后重新执行
+  ```
+- 扫描结果（`latest/`、`history/`）不提交仓库，只在本地生成；Actions 中作为产物保存 14 天：私有仓库直接上传，
+  公开仓库只有设置了 Secret `ARTIFACT_PASSWORD` 才加密上传（`openssl enc -d -aes-256-cbc -pbkdf2 -in results.tgz.enc -out results.tgz`）。
+- 网页地址不写在配置里：通知中的链接取自环境变量 / Secret `SS_WEB_URL`，留空则不带链接。
+- Actions 日志只打印数量统计，不打印具体代码。
+- 本地密钥写在 `.env`（参照 `.env.example`，已忽略）。
 
 **开启微信推送（Server酱，推荐）**：在 <https://sct.ftqq.com> 微信扫码登录 → 复制 SendKey → 仓库 Settings → Secrets and variables
 → Actions → New repository secret，Name 填 `SERVERCHAN_KEY`，Secret 填 SendKey。免费版每天 5 条，本项目每天最多推 2 条
@@ -92,6 +105,9 @@ python -m ss_scanner daily --session asia --email               # 发送邮件�
 
 | Secret | 说明 |
 | --- | --- |
+| `WATCHLIST_CSV_GZ` | 私有自选股（见上） |
+| `SS_WEB_URL` | 可选，网页地址，用于通知里的链接 |
+| `ARTIFACT_PASSWORD` | 可选，公开仓库时加密保存扫描结果 |
 | `SMTP_USER` | 发件邮箱，如 `xxx@gmail.com` |
 | `SMTP_PASS` | 邮箱**应用专用密码**（Gmail：开启两步验证后在 <https://myaccount.google.com/apppasswords> 生成） |
 | `MAIL_TO` | 收件人，多个用逗号分隔（可选，默认发给 SMTP_USER） |
@@ -162,11 +178,11 @@ ss_scanner/
   daily.py        每日扫描、结果存档、HTML 邮件
   cli.py          命令行
 app.py            Streamlit 网页版
-config/watchlist.csv        自选股清单（扫描用）
+config/watchlist.example.csv  自选股清单示例（真实清单 config/watchlist.csv 只放本地）
 config/alerts.yaml          每日扫描与邮件配置
 config/watchlist.yaml       四市场示例自选股
 .github/workflows/daily-scan.yml  每日定时任务
-latest/  history/           每日扫描结果（由 Actions 自动提交）
+latest/  history/           每日扫描结果（本地生成，不入库）
 config/params.example.yaml  参数覆盖示例
 tests/test_core.py          单元测试（代码识别、tick、策略、对称性、T+1）
 ```
@@ -174,5 +190,9 @@ tests/test_core.py          单元测试（代码识别、tick、策略、对称
 扩展新策略：在 `strategies.py` 写一个 `fn(F, i, cx) -> list[Signal]`（只写做多逻辑），加入 `STRATEGIES` 即可自动支持扫描、做空和回测。
 
 ---
+
+## 许可证
+
+[MIT](LICENSE)
 
 ⚠️ 仅用于学习与研究，不构成投资建议。

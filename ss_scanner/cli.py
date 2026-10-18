@@ -91,7 +91,7 @@ def _fetch_all(insts, args, period):
 
 def cmd_import(args):
     from .watchlist import import_longbridge, save_csv
-    df = import_longbridge(args.xlsx, add_extra=not args.no_extra)
+    df = import_longbridge(args.xlsx, add_extra=not args.no_extra, keep_from=args.output)
     p = save_csv(df, args.output)
     on = df[df["enabled"].astype(int) == 1]
     print(f"已写入 {p}：共 {len(df)} 行，可扫描 {len(on)} 只；按市场：{on['market'].value_counts().to_dict()}")
