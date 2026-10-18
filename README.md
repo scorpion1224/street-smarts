@@ -193,6 +193,6 @@ tests/test_core.py          单元测试（代码识别、tick、策略、对称
 
 ## 许可证
 
-[MIT](LICENSE)
+[MIT](LICENSE) · 安全问题请见 [SECURITY.md](SECURITY.md)
 
 ⚠️ 仅用于学习与研究，不构成投资建议。
