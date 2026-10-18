@@ -1,0 +1,6 @@
+# 复制为 params.yaml 后用 --params config/params.yaml 覆盖默认参数（键名见 ss_scanner/strategies.py 的 PARAMS）
+watch_atr: 1.0        # 条件单预警：收盘价距触发位 <= 1 ATR 才显示
+hg_adx: 30            # Holy Grail 的 ADX 阈值
+gapper_adx: 30        # ADX Gapper 的 ADX 阈值
+hv_ratio: 0.5         # HV6/HV100 阈值
+ts_hold: 3            # Turtle Soup 回测最大持有K线

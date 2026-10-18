@@ -1,0 +1,9 @@
+pandas>=2.0
+numpy>=1.24
+pyyaml>=6.0
+yfinance>=0.2.40
+# 可选：A股数据源（--source akshare）
+# akshare>=1.12
+# 网页版
+streamlit>=1.50
+plotly>=5.0
