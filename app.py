@@ -6,7 +6,23 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from pathlib import Path
+
+
+def _reload_if_changed():
+    """Streamlit Cloud 拉取新代码后只重跑 app.py，已导入的 ss_scanner 模块仍是旧版本；检测到文件变化时强制重新导入。"""
+    pkg = Path(__file__).parent / "ss_scanner"
+    stamp = tuple(sorted((f.name, f.stat().st_mtime_ns, f.stat().st_size) for f in pkg.glob("*.py")))
+    old = sys.modules.get("ss_scanner")
+    if old is not None and getattr(old, "_stamp", stamp) != stamp:
+        for name in [m for m in sys.modules if m == "ss_scanner" or m.startswith("ss_scanner.")]:
+            del sys.modules[name]
+    import ss_scanner
+    ss_scanner._stamp = stamp
+
+
+_reload_if_changed()
 
 import pandas as pd
 import plotly.graph_objects as go
