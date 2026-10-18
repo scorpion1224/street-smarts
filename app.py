@@ -15,7 +15,7 @@ def _reload_if_changed():
     pkg = Path(__file__).parent / "ss_scanner"
     stamp = tuple(sorted((f.name, f.stat().st_mtime_ns, f.stat().st_size) for f in pkg.glob("*.py")))
     old = sys.modules.get("ss_scanner")
-    if old is not None and getattr(old, "_stamp", stamp) != stamp:
+    if old is not None and getattr(old, "_stamp", None) != stamp:
         for name in [m for m in sys.modules if m == "ss_scanner" or m.startswith("ss_scanner.")]:
             del sys.modules[name]
     import ss_scanner
