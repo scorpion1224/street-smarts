@@ -13,7 +13,7 @@ on:
         type: choice
         options: [us_eu, asia, all]
       always_send:
-        description: "没有信号也发送邮件（测试邮件配置用）"
+        description: "没有信号也发送通知（测试微信/邮件配置用）"
         type: boolean
         default: false
       any_date:
@@ -62,11 +62,14 @@ jobs:
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           MAIL_TO: ${{ secrets.MAIL_TO }}
           MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          SERVERCHAN_KEY: ${{ secrets.SERVERCHAN_KEY }}
         run: |
           ARGS="--session ${{ steps.s.outputs.session }} --preview latest/${{ steps.s.outputs.session }}_email.html"
           [ "${{ inputs.always_send }}" = "true" ] && ARGS="$ARGS --always"
           [ "${{ inputs.any_date }}" = "true" ] && ARGS="$ARGS --any-date"
-          if [ -n "$SMTP_USER" ] && [ -n "$SMTP_PASS" ]; then ARGS="$ARGS --email"; else echo "::warning::未配置 SMTP_USER/SMTP_PASS，跳过发邮件"; fi
+          if [ -n "$SERVERCHAN_KEY" ]; then ARGS="$ARGS --wechat"; fi
+          if [ -n "$SMTP_USER" ] && [ -n "$SMTP_PASS" ]; then ARGS="$ARGS --email"; fi
+          if [ -z "$SERVERCHAN_KEY" ] && [ -z "$SMTP_PASS" ]; then echo "::warning::未配置 SERVERCHAN_KEY 或 SMTP_*，只保存结果不发通知"; fi
           python -m ss_scanner daily $ARGS
 
       - name: Commit results

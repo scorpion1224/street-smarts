@@ -4,6 +4,8 @@
   python -m ss_scanner daily --session us_eu --email   # 美欧收盘后，并发送邮件
   python -m ss_scanner daily --session all --preview mail.html --any-date
 
+微信通过 Server酱 推送（--wechat）：环境变量 SERVERCHAN_KEY = SendKey（Turbo 的 SCT… 或 Server酱³ 的 sctp…）。
+
 邮件通过 SMTP 发送，读取环境变量：
   SMTP_USER  发件邮箱（如 xxx@gmail.com）      SMTP_PASS  邮箱应用专用密码
   MAIL_TO    收件人（逗号分隔，默认 = SMTP_USER） MAIL_FROM  发件人（默认 = SMTP_USER）
@@ -309,6 +311,74 @@ def send_email(subject: str, html_body: str, text_body: str, attachments: list[P
     return ", ".join(to)
 
 
+# ------------------------------------------------------------------ 微信（Server酱）
+def build_wechat(res: dict, cfg: dict, per: int | None = None, limit: int = 20000) -> tuple[str, str, str]:
+    """返回 (标题≤32字, Markdown 正文, 卡片摘要)。"""
+    sig, pos = res["signals"], res["positions"]
+    counts = sig["类型"].value_counts().to_dict() if not sig.empty else {}
+    name = SESSION_NAME.get(res["session"], res["session"])
+    short_kind = {"挂单": "挂单", "收盘入场": "收盘", "条件单/预警": "预警", "需盘中数据": "盘中"}
+    parts = [f"{short_kind[k]}{counts[k]}" for k in KIND_ORDER if counts.get(k)]
+    title = f"{name}{res['bar_date'][5:]} " + (" ".join(parts) or "无新信号")
+    per = per or int(cfg.get("wechat", {}).get("max_rows_per_strategy", 8))
+    base = cfg.get("web_url") or ""
+    n_today = int((pos["入场日"] == res["bar_date"]).sum()) if len(pos) else 0
+
+    def build(per):
+        md = [f"**{res['bar_date']} {name}** · 有效扫描 {res['n_scanned']}/{res['n_inst']} 只"
+              + (f" · [网页版]({base})" if base else ""), ""]
+        for k in KIND_ORDER:
+            if not counts.get(k):
+                continue
+            d = sig[sig["类型"] == k]
+            md += [f"### {k}（{len(d)}）", ""]
+            order = d.groupby("strategy_id").size().sort_values().index
+            for sid in order:
+                g = merge_brackets(d[d["strategy_id"] == sid])
+                md.append(f"**{STRATEGY_MAP[sid].name}**（{len(g)}）")
+                for _, r in g.head(per).iterrows():
+                    code = f"[{r['代码']}]({base}?s={quote(str(r['代码']))})" if base else str(r["代码"])
+                    risk = "" if pd.isna(r.get("风险%")) else f"（风险{r['风险%']}%）"
+                    idx = "（指数）" if r.get("指数") == "是" else ""
+                    md.append(f"- {code} {r.get('名称', '')}{idx} **{r['方向']}**：{r['操作']}{risk}")
+                if len(g) > per:
+                    md.append(f"- …另 {len(g) - per} 条")
+                md.append("")
+        if n_today:
+            t = pos[pos["入场日"] == res["bar_date"]]
+            md += [f"### 今日已触发入场（{n_today}）", ""]
+            md += [f"- {r['代码']} {r.get('名称', '')} {r['策略']} {r['方向']} 入场{r['入场价']} 止损{r['止损']}"
+                   for _, r in t.head(per * 2).iterrows()]
+            md.append("")
+        md.append("> 完整操作说明见网页「自选股每日扫描」页。仅供学习研究，不构成投资建议。")
+        return "\n".join(md)
+
+    desp = build(per)
+    while len(desp.encode("utf-8")) > limit and per > 2:
+        per -= 2
+        desp = build(per)
+    short = "，".join(f"{k}{counts[k]}" for k in KIND_ORDER if counts.get(k)) + (f"，今日触发{n_today}" if n_today else "")
+    return title[:32], desp, short[:64]
+
+
+def send_serverchan(title: str, desp: str, short: str = "") -> str:
+    import re
+    import urllib.parse
+    import urllib.request
+    key = os.environ.get("SERVERCHAN_KEY", "").strip()
+    if not key:
+        raise RuntimeError("未设置 SERVERCHAN_KEY 环境变量")
+    m = re.match(r"^sctp(\d+)t", key)
+    url = (f"https://{m.group(1)}.push.ft07.com/send/{key}.send" if m      # Server酱³
+           else f"https://sctapi.ftqq.com/{key}.send")                     # Server酱 Turbo
+    data = urllib.parse.urlencode({"title": title, "desp": desp, "short": short, "tags": "Street Smarts"}).encode()
+    with urllib.request.urlopen(urllib.request.Request(url, data), timeout=30) as r:
+        resp = json.loads(r.read().decode("utf-8"))
+    if resp.get("code") not in (0, None):
+        raise RuntimeError(f"Server酱返回错误：{resp}")
+    return "Server酱³" if m else "Server酱 Turbo"
+
+
 def cmd_daily(args):
     cfg = load_cfg(args.config)
     if args.watchlist:
@@ -328,8 +398,17 @@ def cmd_daily(args):
         if args.preview:
             Path(args.preview).write_text(body, encoding="utf-8")
             print("邮件预览：", args.preview)
+        notify = args.always or should_send(res, cfg)
+        if args.wechat:
+            if notify:
+                title, desp, short = build_wechat(res, cfg)
+                if args.preview:
+                    Path(args.preview).with_suffix(".wechat.md").write_text(desp, encoding="utf-8")
+                print(f"已推送微信（{send_serverchan(title, desp, short)}）：{title}")
+            else:
+                print("无需提醒的信号，未推送微信")
         if args.email:
-            if args.always or should_send(res, cfg):
+            if notify:
                 to = send_email(subject, body, text, [paths["signals"], paths["positions"]])
                 print(f"已发送邮件 → {to}：{subject}")
             else:

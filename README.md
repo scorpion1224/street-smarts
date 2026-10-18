@@ -84,7 +84,11 @@ python -m ss_scanner daily --session asia --email               # 发送邮件�
 每次运行：批量下载行情 → 只扫描「最后一根K线是当地今天」的标的（休市/假日自动跳过）→ 结果写入 `latest/`、`history/` 并自动提交到仓库
 （Streamlit 网页「自选股每日扫描」页随之更新）→ 有「挂单 / 收盘入场」信号时发邮件（正文按策略分组，每个策略显示距入场价最近的若干条，完整列表在附件 CSV）。
 
-**开启邮件**：仓库 Settings → Secrets and variables → Actions → New repository secret：
+**开启微信推送（Server酱，推荐）**：在 <https://sct.ftqq.com> 微信扫码登录 → 复制 SendKey → 仓库 Settings → Secrets and variables
+→ Actions → New repository secret，Name 填 `SERVERCHAN_KEY`，Secret 填 SendKey。免费版每天 5 条，本项目每天最多推 2 条
+（也支持 Server酱³ 的 `sctp…` 开头的 SendKey）。微信消息按策略列出入场/止损/风险，点代码直达网页K线图。
+
+**开启邮件（可选，可与微信同时用）**：仓库 Settings → Secrets and variables → Actions → New repository secret：
 
 | Secret | 说明 |
 | --- | --- |
@@ -93,7 +97,7 @@ python -m ss_scanner daily --session asia --email               # 发送邮件�
 | `MAIL_TO` | 收件人，多个用逗号分隔（可选，默认发给 SMTP_USER） |
 | `SMTP_HOST` / `SMTP_PORT` | 可选，默认 `smtp.gmail.com` / `465`；QQ 邮箱 `smtp.qq.com`/`465`，163 `smtp.163.com`/`465` |
 
-手动测试：Actions → Daily watchlist scan → Run workflow，勾选 `always_send`（无信号也发）和 `any_date`（周末补跑）。
+手动测试：Actions → Daily watchlist scan → Run workflow，勾选 `always_send`（无信号也推送）和 `any_date`（周末补跑）。
 
 提醒力度在 `config/alerts.yaml` 调整：`send_when`（actionable / any）、`long_only`、`groups`（只扫某些自选分组）、
 `strategies`、`watch_atr`、`min_atr_pct`、`max_rows_per_strategy` 等。

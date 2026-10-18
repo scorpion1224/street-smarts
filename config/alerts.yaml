@@ -24,3 +24,6 @@ email:
   max_rows: 30                 # 「今日已触发」表最多显示多少条
   include_open_positions: true # 显示「今日已触发入场」的模拟仓位（近 5 日全部持有中仓位在附件）
   subject_prefix: "[Street Smarts]"
+
+wechat:                        # Server酱 推送（GitHub Secret: SERVERCHAN_KEY）；发送条件同 email.send_when
+  max_rows_per_strategy: 8     # 每个策略最多列几条（正文超长时自动减少）
