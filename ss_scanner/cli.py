@@ -4,6 +4,8 @@
   python -m ss_scanner scan AAPL 0700.HK 600519 005930.KS
   python -m ss_scanner scan -w config/watchlist.yaml
   python -m ss_scanner backtest AAPL 600519 --period 10y
+  python -m ss_scanner import 自选股.xlsx            # 导入 Longbridge 自选股
+  python -m ss_scanner daily --session us_eu --email # 收盘后扫描自选股并发邮件
 """
 from __future__ import annotations
 
@@ -23,6 +25,10 @@ from .strategies import PARAMS, STRATEGIES, STRATEGY_MAP
 
 
 def load_watchlist(path: str) -> list[str]:
+    if path.lower().endswith(".csv"):
+        from .watchlist import read_csv
+        df = read_csv(path)
+        return [r["symbol"] for _, r in df.iterrows() if r["symbol"] and str(r["enabled"]).strip() not in ("0", "")]
     cfg = yaml.safe_load(open(path, encoding="utf-8")) or {}
     out = []
     for mkt, syms in cfg.items():
@@ -81,6 +87,19 @@ def _fetch_all(insts, args, period):
             return inst, None, f"{inst.raw}: {e}"
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
         return list(ex.map(job, insts))
+
+
+def cmd_import(args):
+    from .watchlist import import_longbridge, save_csv
+    df = import_longbridge(args.xlsx, add_extra=not args.no_extra)
+    p = save_csv(df, args.output)
+    on = df[df["enabled"].astype(int) == 1]
+    print(f"已写入 {p}：共 {len(df)} 行，可扫描 {len(on)} 只；按市场：{on['market'].value_counts().to_dict()}")
+    off = df[df["enabled"].astype(int) == 0]
+    if len(off):
+        print("跳过：")
+        for _, r in off.iterrows():
+            print(f"  {r['source_code']:<22}{r['name']:<20}{r['note']}")
 
 
 def cmd_list(_args):
@@ -191,6 +210,26 @@ def main(argv=None):
     bp.add_argument("--end", help="回测结束日期")
     bp.add_argument("--cost-bps", type=float, default=10.0, help="单边交易成本（基点）")
     bp.set_defaults(func=cmd_backtest)
+
+    dp = sub.add_parser("daily", help="收盘后扫描自选股（config/watchlist.csv），可发邮件")
+    dp.add_argument("--session", default="auto", choices=["auto", "asia", "us_eu", "all"],
+                    help="asia=A股/港股/韩股/日股/澳股；us_eu=美股/英股/德股；auto 按北京时间自动选择")
+    dp.add_argument("--config", default="config/alerts.yaml")
+    dp.add_argument("-w", "--watchlist", help="覆盖 alerts.yaml 中的自选股 CSV")
+    dp.add_argument("--email", action="store_true", help="发送邮件（需 SMTP 环境变量）")
+    dp.add_argument("--always", action="store_true", help="没有信号也发送邮件")
+    dp.add_argument("--preview", help="把邮件 HTML 写到文件")
+    dp.add_argument("--any-date", action="store_true", help="不要求最后一根K线是当地今天（测试/补跑用）")
+    dp.add_argument("--limit", type=int, help="只扫描前 N 只（测试用）")
+    dp.add_argument("--out", default="latest")
+    dp.add_argument("--no-history", action="store_true")
+    dp.set_defaults(func=lambda a: __import__("ss_scanner.daily", fromlist=["cmd_daily"]).cmd_daily(a))
+
+    ip = sub.add_parser("import", help="从 Longbridge 导出的自选股 Excel 生成 config/watchlist.csv")
+    ip.add_argument("xlsx")
+    ip.add_argument("-o", "--output", default="config/watchlist.csv")
+    ip.add_argument("--no-extra", action="store_true", help="不自动添加韩股原股")
+    ip.set_defaults(func=cmd_import)
 
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO if getattr(args, "verbose", False) else logging.WARNING)

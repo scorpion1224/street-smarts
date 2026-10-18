@@ -61,6 +61,43 @@ streamlit run app.py          # 浏览器打开 http://localhost:8501 ；同一 
 > 也可部署到 Hugging Face Spaces（选 Streamlit SDK）或自己的云服务器（`streamlit run app.py --server.port 80`）。
 > 海外服务器上 AkShare（东方财富接口）可能不通，会自动回退 Yahoo。
 
+## 1.6 每日自动扫描自选股 + 邮件提醒（GitHub Actions，免费）
+
+自选股清单在 `config/watchlist.csv`（由 Longbridge 导出的 Excel 生成，可直接手工增删行、把 `enabled` 改成 0 暂停某只）：
+
+```bash
+python -m ss_scanner import "自选股清单 · 按市场分类.xlsx"   # 重新导入（会覆盖 watchlist.csv）
+python -m ss_scanner daily --session us_eu --preview mail.html  # 本地试跑，生成邮件预览
+python -m ss_scanner daily --session asia --email               # 发送邮件（需 SMTP 环境变量）
+```
+
+导入规则：美股期权、港股轮证/牛熊证、基金（.FD）自动跳过；`.SPX/.NDX/.IXIC/.VIX/HSI` 等指数映射为 Yahoo 指数代码，信号仅作参考；
+`.SH→.SS`、`.JP→.T`、`.UK→.L`、`.AU→.AX`；另自动加入三星电子 `005930.KS`、SK海力士 `000660.KS` 韩股原股。
+
+**定时**（`.github/workflows/daily-scan.yml`，周一至周五）：
+
+| 时段 | 北京时间 | 市场 |
+| --- | --- | --- |
+| `asia` | 17:00 | A股、港股、韩股、日股、澳股 |
+| `us_eu` | 次日 05:30 | 美股、英股、德股 |
+
+每次运行：批量下载行情 → 只扫描「最后一根K线是当地今天」的标的（休市/假日自动跳过）→ 结果写入 `latest/`、`history/` 并自动提交到仓库
+（Streamlit 网页「自选股每日扫描」页随之更新）→ 有「挂单 / 收盘入场」信号时发邮件（正文按策略分组，每个策略显示距入场价最近的若干条，完整列表在附件 CSV）。
+
+**开启邮件**：仓库 Settings → Secrets and variables → Actions → New repository secret：
+
+| Secret | 说明 |
+| --- | --- |
+| `SMTP_USER` | 发件邮箱，如 `xxx@gmail.com` |
+| `SMTP_PASS` | 邮箱**应用专用密码**（Gmail：开启两步验证后在 <https://myaccount.google.com/apppasswords> 生成） |
+| `MAIL_TO` | 收件人，多个用逗号分隔（可选，默认发给 SMTP_USER） |
+| `SMTP_HOST` / `SMTP_PORT` | 可选，默认 `smtp.gmail.com` / `465`；QQ 邮箱 `smtp.qq.com`/`465`，163 `smtp.163.com`/`465` |
+
+手动测试：Actions → Daily watchlist scan → Run workflow，勾选 `always_send`（无信号也发）和 `any_date`（周末补跑）。
+
+提醒力度在 `config/alerts.yaml` 调整：`send_when`（actionable / any）、`long_only`、`groups`（只扫某些自选分组）、
+`strategies`、`watch_atr`、`min_atr_pct`、`max_rows_per_strategy` 等。
+
 ## 2. 已实现策略与规则
 
 | ID | 书中章节 | 设置（以做多为例） | 输出 |
@@ -117,9 +154,15 @@ ss_scanner/
   strategies.py   12 个策略 + 参数 PARAMS + 注册表
   engine.py       方向空间(镜像做空)、信号生成、成交模拟、扫描、回测、统计
   report.py       Markdown / CSV 报告
+  watchlist.py    Longbridge 自选股导入 / 读取
+  daily.py        每日扫描、结果存档、HTML 邮件
   cli.py          命令行
 app.py            Streamlit 网页版
+config/watchlist.csv        自选股清单（扫描用）
+config/alerts.yaml          每日扫描与邮件配置
 config/watchlist.yaml       四市场示例自选股
+.github/workflows/daily-scan.yml  每日定时任务
+latest/  history/           每日扫描结果（由 Actions 自动提交）
 config/params.example.yaml  参数覆盖示例
 tests/test_core.py          单元测试（代码识别、tick、策略、对称性、T+1）
 ```

@@ -242,12 +242,14 @@ def sig_stop_hint(sig: Signal):
 
 
 def scan_instrument(df: pd.DataFrame, inst: Instrument, strategy_ids: list[str], sides: list[str],
-                    params: dict | None = None, recent: int = 5, watch_atr: float | None = None):
-    """返回 (新信号列表, 近期触发列表)。"""
+                    params: dict | None = None, recent: int = 5, watch_atr: float | None = None,
+                    min_bars: int | None = None):
+    """返回 (新信号列表, 近期触发列表)。min_bars 可低于 WARMUP（新股），依赖长周期指标的策略会自动不触发。"""
     cx = make_ctx(inst, params)
     watch_atr = cx.P["watch_atr"] if watch_atr is None else watch_atr
     new_rows, recent_rows = [], []
-    if len(df) < WARMUP:
+    warm = WARMUP if min_bars is None else min(WARMUP, min_bars)
+    if len(df) < warm:
         return new_rows, recent_rows
     i = len(df) - 1
     date = df.index[i]
@@ -275,7 +277,7 @@ def scan_instrument(df: pd.DataFrame, inst: Instrument, strategy_ids: list[str],
                 "strategy_id": sig.strategy,
             })
         # 近期触发：过去 recent 根K线产生的信号，用截至今天的数据模拟
-        for b in range(max(WARMUP, i - recent), i):
+        for b in range(max(warm, i - recent), i):
             for sig in generate(F, b, strategy_ids, side, cx):
                 tr = simulate(F, sig, inst, cx, last=i)
                 if tr is None:

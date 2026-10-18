@@ -1,0 +1,6 @@
+# GitHub Actions 每日扫描所需的最小依赖
+pandas>=2.0
+numpy>=1.24
+pyyaml>=6.0
+yfinance>=0.2.54
+openpyxl>=3.1

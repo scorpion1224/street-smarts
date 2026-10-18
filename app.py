@@ -4,7 +4,9 @@
 """
 from __future__ import annotations
 
+import json
 import re
+from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -26,8 +28,21 @@ def get_data(raw: str, period: str, source: str):
     return inst, df
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def watch_names() -> dict:
+    """自选股清单里的中文名：Yahoo 代码 → 名称。"""
+    try:
+        from ss_scanner.watchlist import read_csv
+        df = read_csv("config/watchlist.csv")
+        return {normalize_symbol(r["symbol"]).candidates[0]: r["name"] for _, r in df.iterrows() if r["symbol"]}
+    except Exception:
+        return {}
+
+
 @st.cache_data(ttl=86400, show_spinner=False)
 def get_name(yahoo: str) -> str:
+    if yahoo in watch_names():
+        return watch_names()[yahoo]
     try:
         import yfinance as yf
         info = yf.Ticker(yahoo).info
@@ -82,7 +97,7 @@ with st.form("q"):
                          placeholder="例如：AAPL 0700 600519 005930.KS")
     submitted = st.form_submit_button("🔍 查询信号", width="stretch", type="primary")
 
-tab_sig, tab_bt, tab_help = st.tabs(["信号", "历史回测", "策略说明"])
+tab_sig, tab_watch, tab_bt, tab_help = st.tabs(["信号", "自选股每日扫描", "历史回测", "策略说明"])
 symbols = [s for s in re.split(r"[\s,，;；]+", text.strip()) if s][:10]
 if submitted:
     st.query_params["s"] = " ".join(symbols)
@@ -108,11 +123,13 @@ with tab_sig:
             c2.metric("收盘价", f"{last['close']:,.4g}" if last["close"] < 1000 else f"{last['close']:,.0f}", f"{chg:+.2f}%", delta_color="inverse")
             if last_bar_incomplete(inst.market, df.index[-1]):
                 st.info("⏱️ 当前处于交易时段，最后一根K线未收盘，信号为盘中临时结果。")
-            if len(df) < 120:
-                st.warning(f"数据不足（{len(df)} 根K线，至少需 120）")
+            if len(df) < 60:
+                st.warning(f"数据不足（{len(df)} 根K线，至少需 60）")
                 continue
+            if len(df) < 120:
+                st.caption(f"ℹ️ 上市仅 {len(df)} 个交易日，HV 等长周期策略不可用")
             new, recent = scan_instrument(df, inst, chosen, sides_for(inst, long_only, allow_short),
-                                          recent=recent_n)
+                                          recent=recent_n, min_bars=60)
             sig = pd.DataFrame(new)
             if sig.empty:
                 st.success("今日没有满足书中策略的信号。")
@@ -136,6 +153,66 @@ with tab_sig:
                 with st.expander(f"📋 最近 {recent_n} 根K线已触发的信号（{len(recent)} 条）"):
                     st.dataframe(pd.DataFrame(recent).drop(columns=["市场", "代码"]), hide_index=True,
                                  width="stretch")
+
+with tab_watch:
+    LATEST = Path("latest")
+    SESS = {"us_eu": "美欧收盘（美股/英股/德股）", "asia": "亚洲收盘（A股/港股/韩股/日股）", "all": "全部市场"}
+    avail = [k for k in SESS if (LATEST / f"{k}_summary.json").exists()]
+    if not avail:
+        st.info("还没有每日扫描结果。GitHub Actions 每个交易日收盘后会自动运行并把结果写入 latest/ 目录。")
+    else:
+        sess = st.radio("时段", avail, format_func=lambda k: SESS[k], horizontal=True)
+        summ = json.loads((LATEST / f"{sess}_summary.json").read_text(encoding="utf-8"))
+        st.caption(f"K线日期 {summ['bar_date']} · 扫描于 {summ['time']}（北京时间） · 自选 {summ['n_inst']} 只，"
+                   f"有效扫描 {summ['n_scanned']} 只 · 新信号 {summ['n_signals']} 条")
+        f = LATEST / f"{sess}_signals.csv"
+        sig = pd.read_csv(f) if f.exists() and f.stat().st_size > 5 else pd.DataFrame()
+        if sig.empty:
+            st.success("最近一次扫描没有新信号。")
+        else:
+            sig["分组"] = sig["分组"].fillna("")
+            c1, c2, c3 = st.columns(3)
+            kinds = c1.multiselect("类型", list(sig["类型"].unique()), default=[k for k in ["挂单", "收盘入场"]
+                                                                              if k in set(sig["类型"])])
+            strats = c2.multiselect("策略", sorted(sig["策略"].unique()))
+            mkts = c3.multiselect("市场", sorted(sig["市场"].unique()))
+            c4, c5, c6 = st.columns(3)
+            groups = sorted({g for x in sig["分组"] for g in str(x).split("、") if g})
+            grp = c4.multiselect("自选分组", groups)
+            side = c5.selectbox("方向", ["全部", "做多", "做空"])
+            kw = c6.text_input("代码/名称包含")
+            d = sig
+            if kinds:
+                d = d[d["类型"].isin(kinds)]
+            if strats:
+                d = d[d["策略"].isin(strats)]
+            if mkts:
+                d = d[d["市场"].isin(mkts)]
+            if grp:
+                d = d[d["分组"].apply(lambda x: bool(set(str(x).split("、")) & set(grp)))]
+            if side != "全部":
+                d = d[d["方向"] == side]
+            if kw:
+                d = d[d["代码"].astype(str).str.contains(kw, case=False) | d["名称"].astype(str).str.contains(kw, case=False)]
+            st.markdown(f"**{len(d)} 条**（点击代码可在「信号」页查看K线图）")
+            show = d.copy()
+            base = st.context.url.split("?")[0] if hasattr(st, "context") and getattr(st.context, "url", None) else ""
+            show["代码"] = show["代码"].astype(str).map(lambda c: f"{base}?s={c}")
+            st.dataframe(show[[c for c in ["代码", "名称", "市场", "策略", "方向", "类型", "入场价", "止损", "风险%",
+                                           "距入场%", "收盘价", "操作", "分组", "备注"] if c in show]],
+                         hide_index=True, width="stretch",
+                         column_config={"代码": st.column_config.LinkColumn("代码", display_text=r"\?s=(.*)")})
+            st.download_button("下载 CSV", d.to_csv(index=False).encode("utf-8-sig"), f"{sess}_signals.csv")
+        p = LATEST / f"{sess}_positions.csv"
+        pos = pd.read_csv(p) if p.exists() and p.stat().st_size > 5 else pd.DataFrame()
+        if not pos.empty:
+            with st.expander(f"📋 近 5 日已触发、仍持有中的模拟仓位（{len(pos)}）"):
+                st.dataframe(pos, hide_index=True, width="stretch")
+        notes = [("无新K线", summ.get("stale")), ("数据失败", summ.get("errors")), ("低波动跳过", summ.get("lowvol")),
+                 ("上市过短跳过", summ.get("skipped"))]
+        for t, v in notes:
+            if v:
+                st.caption(f"{t}：" + "、".join(v))
 
 with tab_bt:
     st.caption("日线级近似回测：信号级统计、同一策略不重叠持仓。用于验证策略在该标的上是否仍然有效。")

@@ -142,3 +142,42 @@ class TestStrategies(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_longbridge_code_conversion():
+    from ss_scanner.watchlist import convert_code
+    assert convert_code("700.HK")[0] == "0700.HK"
+    assert convert_code("BRK.B.US")[0] == "BRK.B"
+    assert convert_code("600089.SH")[0] == "600089.SS"
+    assert convert_code(".SPX.US")[0] == "^GSPC"
+    assert convert_code("HSI.HK")[0] == "^HSI"
+    assert convert_code("7203.JP")[0] == "7203.T"
+    assert convert_code("HSBA.UK")[0] == "HSBA.L"
+    assert convert_code("AAPL270115C300000.US")[0] is None      # 期权
+    assert convert_code("12345.HK")[0] is None                  # 牛熊证
+    assert convert_code("XX0000000000.FD")[0] is None           # 基金
+    from ss_scanner.markets import normalize_symbol
+    assert normalize_symbol("BRK.B").candidates == ["BRK-B"]
+    assert normalize_symbol("^GSPC").is_index
+    assert normalize_symbol("7203.T").market == "JP"
+
+
+def test_daily_email_build():
+    import pandas as pd
+    from datetime import datetime
+    from ss_scanner.daily import build_email, load_cfg, merge_brackets, should_send
+    rows = [
+        {"市场": "美股", "代码": "AAA", "名称": "甲", "策略": "ID/NR4", "strategy_id": "id_nr4", "方向": d,
+         "类型": "挂单", "入场价": p, "止损": q, "风险%": 1.0, "距入场%": 0.5, "收盘价": 10.0, "操作": "x",
+         "备注": "", "指数": ""}
+        for d, p, q in [("做多", 10.1, 9.9), ("做空", 9.9, 10.1)]
+    ]
+    sig = pd.DataFrame(rows)
+    m = merge_brackets(sig)
+    assert len(m) == 1 and m.iloc[0]["方向"] == "双向"
+    cfg = load_cfg(None)
+    res = dict(session="us_eu", markets=["US"], time=datetime.now(), n_inst=1, n_scanned=1, signals=sig,
+               positions=pd.DataFrame(), errors=[], stale=[], skipped=[], lowvol=[], bar_date="2026-01-02")
+    subj, body, text = build_email(res, cfg)
+    assert "挂单 2" in subj and "双向" in body
+    assert should_send(res, cfg)

@@ -105,3 +105,53 @@ def load_history(inst: Instrument, period: str = "2y", start: str | None = None,
             inst.yahoo = sym
             return df
     raise ValueError(f"无法获取 {inst.raw} 的行情（尝试 {inst.candidates}）{': ' + str(last_err) if last_err else ''}")
+
+
+def load_many(insts: list[Instrument], period: str = "2y", batch: int = 80, retries: int = 2,
+              use_cache: bool = False) -> tuple[dict[int, pd.DataFrame], dict[int, str]]:
+    """批量下载 Yahoo 日线（自选股几百只时比逐只快很多）。
+
+    返回 ({列表下标: DataFrame}, {列表下标: 错误信息})。批量失败/缺失的标的逐只回退到 load_history。
+    """
+    import time
+
+    import yfinance as yf
+
+    out: dict[int, pd.DataFrame] = {}
+    errs: dict[int, str] = {}
+    todo = list(range(len(insts)))
+    for attempt in range(retries + 1):
+        missing = []
+        for k in range(0, len(todo), batch):
+            chunk = todo[k:k + batch]
+            syms = [insts[j].candidates[0] for j in chunk]
+            try:
+                raw = yf.download(syms, period=period, auto_adjust=True, group_by="ticker", threads=True,
+                                  progress=False, timeout=30)
+            except Exception as e:  # 整批失败
+                log.warning("批量下载失败(%s)：%s", e, syms[:3])
+                missing += chunk
+                continue
+            for j, sym in zip(chunk, syms):
+                try:
+                    df = raw[sym] if isinstance(raw.columns, pd.MultiIndex) else raw
+                    df = _clean(df)
+                except Exception:
+                    df = None
+                if df is not None and len(df):
+                    insts[j].yahoo = sym
+                    out[j] = df
+                else:
+                    missing.append(j)
+        todo = missing
+        if not todo:
+            break
+        if attempt < retries:
+            time.sleep(3)
+    # 逐只回退（含 KR 的 .KS→.KQ 等候选）
+    for j in todo:
+        try:
+            out[j] = load_history(insts[j], period=period, use_cache=use_cache)
+        except Exception as e:
+            errs[j] = f"{insts[j].raw}: {e}"
+    return out, errs

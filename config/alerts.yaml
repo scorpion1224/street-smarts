@@ -1,0 +1,26 @@
+# 每日收盘后自动扫描 & 邮件提醒配置（python -m ss_scanner daily 使用）
+watchlist: config/watchlist.csv          # 自选股（由 tools/import_longbridge.py 从 Longbridge 导出表生成）
+web_url: https://your-app.streamlit.app/
+
+# 时段 → 市场。GitHub Actions 分两次运行：亚洲收盘后、美欧收盘后
+sessions:
+  asia: [CN, HK, KR, JP, AU]
+  us_eu: [US, UK, DE]
+
+strategies: []          # 空 = 全部默认策略；也可写 [turtle_soup_plus_one, holy_grail, ...]
+long_only: false        # true = 只提醒做多
+allow_short_cn: false   # A股是否输出做空（融券）信号
+groups: []              # 只扫描这些自选分组（空 = 全部），如 [科技, 指数]
+min_bars: 60            # 上市不足该天数的新股跳过（不足 120 日时 HV 类策略自动不触发）
+watch_atr: 0.5          # 条件单/预警：收盘价距触发位 ≤ N×ATR 才提醒（越小越少）
+min_atr_pct: 0.6        # 20日平均振幅低于该百分比的标的跳过（货币/短债 ETF 等）
+
+email:
+  # 什么情况下发邮件：actionable = 有「挂单 / 收盘入场」信号；any = 任意新信号（含预警）
+  send_when: actionable
+  # 邮件正文包含的信号类型（其余只在附件 CSV 中）
+  body_kinds: [挂单, 收盘入场, 条件单/预警, 需盘中数据]
+  max_rows_per_strategy: 12    # 正文中每个策略最多显示多少条（按距入场价由近到远），其余在附件 CSV
+  max_rows: 30                 # 「今日已触发」表最多显示多少条
+  include_open_positions: true # 显示「今日已触发入场」的模拟仓位（近 5 日全部持有中仓位在附件）
+  subject_prefix: "[Street Smarts]"
