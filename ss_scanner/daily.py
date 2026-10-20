@@ -18,7 +18,7 @@ import json
 import os
 import smtplib
 import ssl
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.message import EmailMessage
 from pathlib import Path
 from urllib.parse import quote
@@ -81,6 +81,22 @@ def local_today(market: str):
     return datetime.now(ZoneInfo(MARKETS[market].timezone)).date()
 
 
+def expected_session(market: str, now: datetime | None = None):
+    """该市场「最近一个已收盘的交易日」（按工作日估算，不含节假日）。
+
+    定时任务可能延迟数小时（甚至跨过当地午夜），所以不能简单要求 K 线日期 == 当地今天：
+    当地收盘前运行 → 期望上一个工作日；收盘后 → 期望今天。节假日时最新 K 线早于期望日，视为休市跳过。
+    """
+    m = MARKETS[market]
+    now = (now or datetime.now(ZoneInfo(m.timezone))).astimezone(ZoneInfo(m.timezone))
+    d = now.date()
+    if now.weekday() >= 5 or now.time() < m.close_time:
+        d -= timedelta(days=1)
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d
+
+
 # ------------------------------------------------------------------ 扫描
 def run_scan(cfg: dict, session: str, any_date: bool = False, limit: int | None = None) -> dict:
     markets = set(sum(cfg["sessions"].values(), [])) if session == "all" else set(cfg["sessions"][session])
@@ -92,16 +108,20 @@ def run_scan(cfg: dict, session: str, any_date: bool = False, limit: int | None 
         insts = insts[:limit]
     strategies = cfg.get("strategies") or [s.id for s in STRATEGIES if s.default]
     data, errs = load_many(insts)
-    new_all, open_all, stale, skipped, lowvol = [], [], [], [], []
+    new_all, open_all, stale, skipped, lowvol, bar_dates = [], [], [], [], [], []
     errors = list(errs.values())
     for j, inst in enumerate(insts):
         df = data.get(j)
         if df is None or df.empty:
             continue
-        last = df.index[-1].date()
-        if not any_date and last != local_today(inst.market):
-            stale.append(f"{inst.display}（最新 {last}）")
-            continue
+        if not any_date:
+            exp = expected_session(inst.market)
+            df = df[df.index.date <= exp]          # 去掉盘中未收盘的 K 线（任务延迟到次日开盘后时）
+            if df.empty or df.index[-1].date() < exp:
+                last = df.index[-1].date() if len(df) else "无"
+                stale.append(f"{inst.display}（最新 {last}）")
+                continue
+        bar_dates.append(str(df.index[-1].date()))
         if len(df) < cfg["min_bars"]:
             skipped.append(f"{inst.display}（仅 {len(df)} 根K线）")
             continue
@@ -131,7 +151,7 @@ def run_scan(cfg: dict, session: str, any_date: bool = False, limit: int | None 
         sig = sig.sort_values(["_k", "指数", "_d"], na_position="last").drop(columns=["_k", "_d"])
         sig = sig[[c for c in cols_first if c in sig] + [c for c in sig.columns if c not in cols_first]]
     pos = pd.DataFrame(open_all)
-    dates = sorted({str(d.index[-1].date()) for d in data.values() if len(d)})
+    dates = sorted(set(bar_dates))
     return dict(session=session, markets=sorted(markets), time=datetime.now(ZoneInfo("Asia/Shanghai")),
                 n_inst=len(insts), n_scanned=len(insts) - len(errors) - len(stale) - len(skipped) - len(lowvol),
                 signals=sig, positions=pos, errors=errors, stale=stale, skipped=skipped, lowvol=lowvol,
@@ -400,6 +420,8 @@ def cmd_daily(args):
     sessions = list(cfg["sessions"]) if args.session == "auto" else [args.session]
     if args.session == "auto":  # 按当前时间选择：北京时间 12:00 前跑美欧，之后跑亚洲
         sessions = ["us_eu"] if datetime.now(ZoneInfo("Asia/Shanghai")).hour < 12 else ["asia"]
+    state_path = Path(args.state) if args.state else None
+    state = json.loads(state_path.read_text(encoding="utf-8")) if state_path and state_path.exists() else {}
     for s in sessions:
         res = run_scan(cfg, s, any_date=args.any_date, limit=args.limit)
         paths = save_outputs(res, args.out, None if args.no_history else "history")
@@ -413,17 +435,27 @@ def cmd_daily(args):
             Path(args.preview).write_text(body, encoding="utf-8")
             print("邮件预览：", args.preview)
         notify = args.always or should_send(res, cfg)
+        if notify and not args.always and res["bar_date"] and state.get(s) == res["bar_date"]:
+            print(f"{s} {res['bar_date']} 已推送过（备用定时任务），不重复推送")
+            notify = False
+        sent = False
         if args.wechat:
             if notify:
                 title, desp, short = build_wechat(res, cfg)
                 if args.preview:
                     Path(args.preview).with_suffix(".wechat.md").write_text(desp, encoding="utf-8")
                 print(f"已推送微信（{send_serverchan(title, desp, short)}）：{title}")
+                sent = True
             else:
                 print("无需提醒的信号，未推送微信")
         if args.email:
             if notify:
                 to = send_email(subject, body, text, [paths["signals"], paths["positions"]])
-                print(f"已发送邮件 → {to}：{subject}")
+                print(f"已发送邮件（{len(to.split(','))} 个收件人）：{subject}")
+                sent = True
             else:
                 print("无需提醒的信号，未发送邮件（--always 可强制发送）")
+        if sent and state_path and res["bar_date"]:
+            state[s] = res["bar_date"]
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(json.dumps(state), encoding="utf-8")

@@ -8,9 +8,12 @@ name: Daily watchlist scan
 
 on:
   schedule:
-    # GitHub cron 使用 UTC，且可能延迟 5–30 分钟
-    - cron: "0 9 * * 1-5"     # 北京 17:00：A股/港股/韩股/日股/澳股 收盘后
-    - cron: "30 21 * * 1-5"   # 北京次日 05:30：美股/英股/德股 收盘后（夏令时/冬令时都已收盘）
+    # GitHub cron 使用 UTC，高峰期可能延迟数小时；避开整点，并各设一个备用时间。
+    # 同一交易日只推送一次（.state 通过 Actions cache 记录已推送的K线日期），备用任务不会重复推送。
+    - cron: "23 9 * * 1-5"    # 北京 17:23：亚洲（A股/港股/韩股/日股/澳股）
+    - cron: "23 11 * * 1-5"   # 北京 19:23：亚洲 备用
+    - cron: "43 21 * * 1-5"   # 北京次日 05:43：美欧（美股/英股/德股）
+    - cron: "43 23 * * 1-5"   # 北京次日 07:43：美欧 备用
   workflow_dispatch:
     inputs:
       session:
@@ -65,11 +68,19 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "session=${{ inputs.session }}" >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.event.schedule }}" = "0 9 * * 1-5" ]; then
-            echo "session=asia" >> "$GITHUB_OUTPUT"
           else
-            echo "session=us_eu" >> "$GITHUB_OUTPUT"
+            case "${{ github.event.schedule }}" in
+              "23 9 "*|"23 11 "*) echo "session=asia" >> "$GITHUB_OUTPUT" ;;
+              *) echo "session=us_eu" >> "$GITHUB_OUTPUT" ;;
+            esac
           fi
+
+      - name: Restore notify state
+        uses: actions/cache/restore@v4
+        with:
+          path: .state
+          key: notify-${{ steps.s.outputs.session }}-${{ github.run_id }}
+          restore-keys: notify-${{ steps.s.outputs.session }}-
 
       - name: Scan & notify
         env:
@@ -82,14 +93,22 @@ jobs:
           MAIL_TO: ${{ secrets.MAIL_TO }}
           MAIL_FROM: ${{ secrets.MAIL_FROM }}
         run: |
-          ARGS="--session ${{ steps.s.outputs.session }} --preview latest/${{ steps.s.outputs.session }}_email.html"
+          ARGS="--session ${{ steps.s.outputs.session }} --preview latest/${{ steps.s.outputs.session }}_email.html --state .state/notified.json"
           [ "${{ inputs.always_send }}" = "true" ] && ARGS="$ARGS --always"
           [ "${{ inputs.any_date }}" = "true" ] && ARGS="$ARGS --any-date"
           if [ -n "$SERVERCHAN_KEY" ]; then ARGS="$ARGS --wechat"; fi
           if [ -n "$SMTP_USER" ] && [ -n "$SMTP_PASS" ]; then ARGS="$ARGS --email"; fi
           if [ -z "$SERVERCHAN_KEY" ] && [ -z "$SMTP_PASS" ]; then echo "::warning::未配置 SERVERCHAN_KEY 或 SMTP_*，不会发送通知"; fi
-          mkdir -p latest
+          mkdir -p latest .state
+          [ -f .state/notified.json ] || echo '{}' > .state/notified.json
           python -m ss_scanner daily $ARGS
+
+      - name: Save notify state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .state
+          key: notify-${{ steps.s.outputs.session }}-${{ github.run_id }}
 
       - name: Package results (private)
         id: pkg

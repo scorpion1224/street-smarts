@@ -32,3 +32,4 @@ mail_preview*.html
 .streamlit/secrets.toml
 *.pem
 *.key
+.state/

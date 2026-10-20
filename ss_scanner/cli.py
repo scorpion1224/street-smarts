@@ -222,6 +222,7 @@ def main(argv=None):
     dp.add_argument("--preview", help="把邮件 HTML 写到文件")
     dp.add_argument("--any-date", action="store_true", help="不要求最后一根K线是当地今天（测试/补跑用）")
     dp.add_argument("--limit", type=int, help="只扫描前 N 只（测试用）")
+    dp.add_argument("--state", help="记录已推送的K线日期的 JSON 文件（防止备用定时任务重复推送）")
     dp.add_argument("--out", default="latest")
     dp.add_argument("--no-history", action="store_true")
     dp.set_defaults(func=lambda a: __import__("ss_scanner.daily", fromlist=["cmd_daily"]).cmd_daily(a))
