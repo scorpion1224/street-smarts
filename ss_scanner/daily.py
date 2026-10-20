@@ -18,7 +18,7 @@ import json
 import os
 import smtplib
 import ssl
-from datetime import datetime, timedelta
+from datetime import datetime
 from email.message import EmailMessage
 from pathlib import Path
 from urllib.parse import quote
@@ -29,7 +29,7 @@ import yaml
 
 from .data import load_many
 from .engine import scan_instrument, sides_for
-from .markets import INDEX_NOTE, MARKETS
+from .markets import INDEX_NOTE, MARKETS, expected_session
 from .report import DISCLAIMER
 from .strategies import STRATEGIES, STRATEGY_MAP
 from .watchlist import load_instruments
@@ -81,22 +81,6 @@ def local_today(market: str):
     return datetime.now(ZoneInfo(MARKETS[market].timezone)).date()
 
 
-def expected_session(market: str, now: datetime | None = None):
-    """该市场「最近一个已收盘的交易日」（按工作日估算，不含节假日）。
-
-    定时任务可能延迟数小时（甚至跨过当地午夜），所以不能简单要求 K 线日期 == 当地今天：
-    当地收盘前运行 → 期望上一个工作日；收盘后 → 期望今天。节假日时最新 K 线早于期望日，视为休市跳过。
-    """
-    m = MARKETS[market]
-    now = (now or datetime.now(ZoneInfo(m.timezone))).astimezone(ZoneInfo(m.timezone))
-    d = now.date()
-    if now.weekday() >= 5 or now.time() < m.close_time:
-        d -= timedelta(days=1)
-    while d.weekday() >= 5:
-        d -= timedelta(days=1)
-    return d
-
-
 # ------------------------------------------------------------------ 扫描
 def run_scan(cfg: dict, session: str, any_date: bool = False, limit: int | None = None) -> dict:
     markets = set(sum(cfg["sessions"].values(), [])) if session == "all" else set(cfg["sessions"][session])
@@ -107,7 +91,7 @@ def run_scan(cfg: dict, session: str, any_date: bool = False, limit: int | None 
     if limit:
         insts = insts[:limit]
     strategies = cfg.get("strategies") or [s.id for s in STRATEGIES if s.default]
-    data, errs = load_many(insts)
+    data, errs = load_many(insts, refresh_stale=not any_date)
     new_all, open_all, stale, skipped, lowvol, bar_dates = [], [], [], [], [], []
     errors = list(errs.values())
     for j, inst in enumerate(insts):

@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 
@@ -212,3 +212,19 @@ def last_bar_incomplete(market: str, last_date) -> bool:
     except AttributeError:
         d = last_date
     return now.weekday() < 5 and d == now.date() and m.open_time <= now.time() < m.close_time
+
+
+def expected_session(market: str, now: datetime | None = None):
+    """该市场「最近一个已收盘的交易日」（按工作日估算，不含节假日）。
+
+    定时任务可能延迟数小时（甚至跨过当地午夜），所以不能简单要求 K 线日期 == 当地今天：
+    当地收盘前运行 → 期望上一个工作日；收盘后 → 期望今天。节假日时最新 K 线早于期望日，视为休市跳过。
+    """
+    m = MARKETS[market]
+    now = (now or datetime.now(ZoneInfo(m.timezone))).astimezone(ZoneInfo(m.timezone))
+    d = now.date()
+    if now.weekday() >= 5 or now.time() < m.close_time:
+        d -= timedelta(days=1)
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d

@@ -108,10 +108,14 @@ def load_history(inst: Instrument, period: str = "2y", start: str | None = None,
 
 
 def load_many(insts: list[Instrument], period: str = "2y", batch: int = 80, retries: int = 2,
-              use_cache: bool = False) -> tuple[dict[int, pd.DataFrame], dict[int, str]]:
+              use_cache: bool = False, refresh_stale: bool = True) -> tuple[dict[int, pd.DataFrame], dict[int, str]]:
     """批量下载 Yahoo 日线（自选股几百只时比逐只快很多）。
 
-    返回 ({列表下标: DataFrame}, {列表下标: 错误信息})。批量失败/缺失的标的逐只回退到 load_history。
+    返回 ({列表下标: DataFrame}, {列表下标: 错误信息})。
+    - 按市场分批（yf.download 混合不同时区时会丢掉部分最新 K 线）；
+    - 批量失败/缺失的标的逐只回退到 load_history；
+    - refresh_stale：批量结果的最新 K 线早于该市场最近收盘日时，再逐只用 Ticker.history 复查一次
+      （批量接口偶尔返回滞后数据；真正休市的市场复查后仍然是旧日期）。
     """
     import time
 
@@ -124,8 +128,11 @@ def load_many(insts: list[Instrument], period: str = "2y", batch: int = 80, retr
     todo = list(range(len(insts)))
     for attempt in range(retries + 1):
         missing = []
-        for k in range(0, len(todo), batch):
-            chunk = todo[k:k + batch]
+        groups: dict[str, list[int]] = {}
+        for j in todo:
+            groups.setdefault(insts[j].market, []).append(j)
+        chunks = [g[k:k + batch] for g in groups.values() for k in range(0, len(g), batch)]
+        for chunk in chunks:
             syms = [insts[j].candidates[0] for j in chunk]
             try:
                 raw = yf.download(syms, period=period, auto_adjust=True, group_by="ticker", threads=True,
@@ -156,4 +163,15 @@ def load_many(insts: list[Instrument], period: str = "2y", batch: int = 80, retr
             out[j] = load_history(insts[j], period=period, use_cache=use_cache)
         except Exception as e:
             errs[j] = f"{insts[j].raw}: {e}"
+    if refresh_stale:
+        from .markets import expected_session
+        exp = {m: expected_session(m) for m in {i.market for i in insts}}
+        for j, df in list(out.items()):
+            if df.index[-1].date() < exp[insts[j].market]:
+                try:
+                    df2 = _clean(_yahoo(insts[j].yahoo or insts[j].candidates[0], period, None, None))
+                    if len(df2) and df2.index[-1] > df.index[-1]:
+                        out[j] = df2
+                except Exception:
+                    pass
     return out, errs
